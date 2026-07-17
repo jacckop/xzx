@@ -5,11 +5,11 @@ final class HomeVM: ObservableObject {
     @Published var movies: [MediaItem] = []
     @Published var series: [MediaItem] = []
     @Published var loading = false
-    @Published var error: String?
+    @Published var errorMessage: String?
 
     func load(_ service: CatalogService) async {
         loading = true
-        error = nil
+        errorMessage = nil
         defer { loading = false }
 
         do {
@@ -20,10 +20,10 @@ final class HomeVM: ObservableObject {
             series = result.1
 
             if movies.isEmpty && series.isEmpty {
-                error = "اتصل الخادم، لكن لم تُقرأ النتائج. قد تكون صيغة API قد تغيّرت أو الخدمة غير متاحة على هذه الشبكة."
+                errorMessage = "اتصل الخادم، لكن لم تُقرأ النتائج. قد تكون صيغة API قد تغيّرت أو الخدمة غير متاحة على هذه الشبكة."
             }
         } catch {
-            error = error.localizedDescription
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -48,11 +48,11 @@ struct HomeView: View {
                         SectionRow(title: "أحدث المسلسلات", items: vm.series)
                     }
 
-                    if let error = vm.error {
+                    if let errorMessage = vm.errorMessage {
                         VStack(spacing: 14) {
                             Image(systemName: "wifi.exclamationmark")
                                 .font(.system(size: 34))
-                            Text(error)
+                            Text(errorMessage)
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.secondary)
                             Button("إعادة المحاولة") {
