@@ -243,8 +243,10 @@ Gemini Request Routing
 Ghost
 Ghost Mode
 Gifts
+Glass Profile
 Glass Settings List
 Glass Tinting
+Glass, blur and sections
 Google
 Google Gemini API Key
 Google Translate
@@ -317,6 +319,7 @@ How many messages to send?
 Hybrid
 icon next to the timestamp indicates an edit.
 icon. Deleting again removes them permanently.
+Icons, bubbles, font
 ID & DC
 ID & DC in Profile
 If both of you are mutual contacts
@@ -402,11 +405,11 @@ No mutual reply today yet.
 No response from the model.
 No saved chats
 Noir
-Not Selected
 Not selected
 not selected
-Not Set
+Not Selected
 not set
+Not Set
 Nothing found
 Notifications
 Nova
@@ -546,6 +549,7 @@ Semi-transparent on Mention
 Send Acceleration
 Send as Video Message
 Send Large Photos (2560px)
+Sending, format, media
 Server error
 Sessions
 Shadow
@@ -696,3 +700,6 @@ Wrong recovery word
 Yellow
 Zalgo Filter
 Zalgo Filter (remove text distortion)
+Zoom, HD, video msgs
+Найти опцию...
+Поиск настроек

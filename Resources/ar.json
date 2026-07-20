@@ -236,8 +236,10 @@
   "Ghost": "شبح",
   "Ghost Mode": "وضع الشبح",
   "Gifts": "الهدايا",
+  "Glass Profile": "الملف الشخصي الزجاجي",
   "Glass Settings List": "قائمة إعدادات زجاجية",
   "Glass Tinting": "صبغة الزجاج",
+  "Glass, blur and sections": "الزجاج، التمويه والأقسام",
   "Google": "Google",
   "Google Gemini API Key": "مفتاح API لـ Google Gemini",
   "Google Translate": "ترجمة Google",
@@ -308,6 +310,7 @@
   "Hybrid": "هجين",
   "ID & DC": "المعرّف ومركز البيانات",
   "ID & DC in Profile": "المعرّف ومركز البيانات في الملف",
+  "Icons, bubbles, font": "الأيقونات، الفقاعات والخط",
   "If both of you are mutual contacts": "إذا كنتما من جهات الاتصال المتبادلة",
   "If you forget your password, you can reset it using this word": "إذا نسيت كلمة المرور يمكنك إعادة تعيينها باستخدام هذه الكلمة",
   "Import .ttf, .otf, or .zip archives with font files. Zip imports can include font families, so formatting variants stay visible.": "استورد ملفات .ttf أو .otf أو أرشيفات .zip التي تحتوي على خطوط. يمكن لملفات ZIP أن تتضمن عائلات خطوط حتى تبقى أنماط التنسيق ظاهرة.",
@@ -514,6 +517,7 @@
   "Send Acceleration": "تسريع الإرسال",
   "Send Large Photos (2560px)": "إرسال صور كبيرة (2560 بكسل)",
   "Send as Video Message": "إرسال كرسالة فيديو",
+  "Sending, format, media": "الإرسال، التنسيق والوسائط",
   "Server error": "خطأ في الخادم",
   "Sessions": "الجلسات",
   "Shadow": "ظل",
@@ -653,6 +657,7 @@
   "Yellow": "أصفر",
   "Zalgo Filter": "مرشح Zalgo",
   "Zalgo Filter (remove text distortion)": "مرشح Zalgo (إزالة تشويه النص)",
+  "Zoom, HD, video msgs": "التكبير، الدقة العالية ورسائل الفيديو",
   "adds a thin frame around each message.": "يضيف إطاراً رفيعاً حول كل رسالة.",
   "adds technical data to profiles.": "يضيف بيانات تقنية إلى الملفات الشخصية.",
   "adds them to the icon picker.": "يضيفها إلى منتقي الأيقونات.",
@@ -697,5 +702,7 @@
   "uses the profile color as background.": "يستخدم لون الملف الشخصي كخلفية.",
   "warns in profiles from the Whitegram scammer database.": "يعرض تحذيراً في الملفات المدرجة بقاعدة بيانات وايت كرام للمحتالين.",
   "were not found for this track": "لم يتم العثور عليها لهذا المقطع",
-  "will be permanently deleted.": "سيُحذف نهائياً."
+  "will be permanently deleted.": "سيُحذف نهائياً.",
+  "Найти опцию...": "ابحث عن خيار…",
+  "Поиск настроек": "البحث في الإعدادات"
 }

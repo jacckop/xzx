@@ -1,4 +1,4 @@
-# WhitegramArabic Safe v3 Safe v2
+# WhitegramArabic Safe v4 Safe v2
 
 نسخة آمنة مصححة من الديلب لتعريب قسم **Whitegram Features** داخل تطبيق Whitegram، من دون الاعتماد على Substrate أو ElleKit. صُمم للحقن المباشر داخل ملف IPA ثم إعادة توقيع التطبيق.
 
@@ -77,3 +77,21 @@ python3 tools/generate_translations.py
 ## لماذا أضيف Hook لـ NSAttributedString؟
 
 واجهة Whitegram 12.8 تخزن عناوين الخيارات داخل خصائص Swift في `ImmediateTextNode` ولا تعرض `setText:` إلى Objective-C. لذلك تستهدف v3 إنشاء `NSAttributedString` في Foundation قبل وصوله إلى العقدة. الاعتراض محدود بالكلاسات الفعلية وبالنصوص الموجودة في القاموس فقط.
+
+
+## تحقق خاص بصور الواجهة
+
+يتضمن القاموس النصوص الظاهرة في الصور المرسلة، ومنها:
+
+- Appearance / Notifications / Liquid Glass / Messages / Camera
+- Icons, bubbles, font
+- Glass, blur and sections
+- Sending, format, media
+- Zoom, HD, video msgs
+- Liquid Glass Messages
+- Glass Settings List
+- Glass Profile
+- Liquid Glass Gifts
+- Liquid Glass Buttons
+- Glass Tinting
+- حقلا البحث الروسيان الظاهران في الصفحة
