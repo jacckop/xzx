@@ -1,4 +1,4 @@
-# WhitegramArabic Safe v2
+# WhitegramArabic Safe v3 Safe v2
 
 نسخة آمنة مصححة من الديلب لتعريب قسم **Whitegram Features** داخل تطبيق Whitegram، من دون الاعتماد على Substrate أو ElleKit. صُمم للحقن المباشر داخل ملف IPA ثم إعادة توقيع التطبيق.
 
@@ -72,3 +72,8 @@ python3 tools/generate_translations.py
 ## إصلاح v2
 
 أزيلت الاعتراضات الواسعة التي كانت تفحص جميع كلاسات التطبيق وتعترض أي دالة باسم `setText:` أو `setTitle:`. كانت تلك الطريقة قد تمس كائنات ليست نصية بعد تسجيل الدخول وتؤدي إلى انهيار التطبيق. النسخة الحالية تستخدم UIKit وقائمة صغيرة ثابتة من كلاسات النص المعروفة فقط، وتتحقق من توقيع الدالة قبل اعتراضها.
+
+
+## لماذا أضيف Hook لـ NSAttributedString؟
+
+واجهة Whitegram 12.8 تخزن عناوين الخيارات داخل خصائص Swift في `ImmediateTextNode` ولا تعرض `setText:` إلى Objective-C. لذلك تستهدف v3 إنشاء `NSAttributedString` في Foundation قبل وصوله إلى العقدة. الاعتراض محدود بالكلاسات الفعلية وبالنصوص الموجودة في القاموس فقط.

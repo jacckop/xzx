@@ -4,7 +4,7 @@
 #import "WGTranslations.h"
 
 /*
- * WhitegramArabic Safe Runtime
+ * WhitegramArabic Safe Runtime v3
  *
  * This build deliberately avoids:
  *   - scanning every Objective-C/Swift class in the app;
@@ -320,6 +320,94 @@ static void WGInstallUIKitHooks(void) {
     });
 }
 
+
+#pragma mark - Targeted NSAttributedString class-cluster hooks
+
+/*
+ * Whitegram's settings screen stores most visible text directly in Swift
+ * TextNode properties. Those properties do not expose Objective-C setters,
+ * so UIKit hooks never see them. The stable interception point is the
+ * concrete Foundation attributed-string initializer used before assignment.
+ *
+ * We hook only the concrete immutable/mutable classes returned by Foundation,
+ * verify exact signatures, and translate only strings present in our map.
+ */
+
+static id WGAttributedInitString(id self, SEL _cmd, NSString *string) {
+    IMP original = WGFindOriginalIMP(self, _cmd);
+    if (!original) return nil;
+    NSString *translated = WGArabicTranslateString(string);
+    return ((id (*)(id, SEL, NSString *))original)(self, _cmd, translated);
+}
+
+static id WGAttributedInitStringAttributes(id self, SEL _cmd, NSString *string, NSDictionary *attributes) {
+    IMP original = WGFindOriginalIMP(self, _cmd);
+    if (!original) return nil;
+    NSString *translated = WGArabicTranslateString(string);
+    return ((id (*)(id, SEL, NSString *, NSDictionary *))original)(self, _cmd, translated, attributes);
+}
+
+static BOOL WGMethodMatchesAttributedInit(Method method, NSUInteger argumentCount) {
+    if (!method || method_getNumberOfArguments(method) != argumentCount) return NO;
+    char returnType[32] = {0};
+    char argType[32] = {0};
+    method_getReturnType(method, returnType, sizeof(returnType));
+    method_getArgumentType(method, 2, argType, sizeof(argType));
+    return returnType[0] == '@' && argType[0] == '@';
+}
+
+static BOOL WGReplaceAttributedInitializer(Class cls, SEL selector, IMP replacement, NSUInteger argumentCount) {
+    if (!cls || !selector || !replacement) return NO;
+    Method method = class_getInstanceMethod(cls, selector);
+    if (!WGMethodMatchesAttributedInit(method, argumentCount)) return NO;
+
+    NSString *key = WGHookKey(cls, selector);
+    @synchronized (WGInstalledHooks()) {
+        if ([WGInstalledHooks() containsObject:key]) return YES;
+        IMP original = method_getImplementation(method);
+        const char *types = method_getTypeEncoding(method);
+        if (!original || !types) return NO;
+        if (!class_addMethod(cls, selector, replacement, types)) {
+            class_replaceMethod(cls, selector, replacement, types);
+        }
+        WGOriginalIMPs()[key] = [NSValue valueWithPointer:original];
+        [WGInstalledHooks() addObject:key];
+        return YES;
+    }
+}
+
+static void WGInstallAttributedStringHooks(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSAttributedString *immutableA = [[NSAttributedString alloc] initWithString:@"WGProbe"];
+        NSAttributedString *immutableB = [[NSAttributedString alloc] initWithString:@"WGProbe" attributes:@{}];
+        NSMutableAttributedString *mutableA = [[NSMutableAttributedString alloc] initWithString:@"WGProbe"];
+        NSMutableAttributedString *mutableB = [[NSMutableAttributedString alloc] initWithString:@"WGProbe" attributes:@{}];
+
+        NSArray<Class> *classes = @[
+            [immutableA class],
+            [immutableB class],
+            [mutableA class],
+            [mutableB class]
+        ];
+
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        for (Class cls in classes) {
+            NSString *name = NSStringFromClass(cls);
+            if (!cls || [seen containsObject:name]) continue;
+            [seen addObject:name];
+            WGReplaceAttributedInitializer(cls,
+                                           @selector(initWithString:),
+                                           (IMP)WGAttributedInitString,
+                                           3);
+            WGReplaceAttributedInitializer(cls,
+                                           @selector(initWithString:attributes:),
+                                           (IMP)WGAttributedInitStringAttributes,
+                                           4);
+        }
+    });
+}
+
 #pragma mark - Allow-listed Telegram text classes
 
 static void WGHookClassSetter(const char *className, const char *selectorName) {
@@ -354,6 +442,7 @@ static void WGInstallTelegramTextHooks(void) {
 
 static void WGInstallAllHooks(void) {
     WGInstallUIKitHooks();
+    WGInstallAttributedStringHooks();
     WGInstallTelegramTextHooks();
 }
 

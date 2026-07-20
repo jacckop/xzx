@@ -1,9 +1,14 @@
 # Changelog
 
-## 2.0.0-safe
+## Safe v3
 
-- Removed global Objective-C/Swift runtime class scanning.
-- Removed NSAttributedString class-cluster initializer hooks.
-- Added strict `void setter(id)` signature validation.
-- Limited Telegram hooks to an explicit text-class allow-list.
-- Kept the full Arabic translation dictionary and GitHub Actions build.
+- أصلح عدم تعريب واجهة Whitegram المبنية بعُقد Telegram النصية.
+- أضاف اعتراضاً محدوداً ودقيقاً لمُنشئات `NSAttributedString` الفعلية في Foundation.
+- لا يفحص جميع كلاسات التطبيق ولا يعترض تسجيل الدخول أو كائنات Telegram العامة.
+- لا يغيّر إلا النصوص المطابقة لقاموس Whitegram، لذلك تبقى بقية نصوص التطبيق كما هي.
+- أبقى فحص التواقيع قبل كل Hook لمنع استدعاء دالة بتوقيع غير مطابق.
+
+## Safe v2
+
+- إزالة الفحص الواسع لكلاسات التطبيق.
+- إزالة اعتراض class-cluster الخاص بالنصوص المنسقة.
