@@ -6,6 +6,7 @@ BUILD_DIR="$ROOT/build"
 mkdir -p "$BUILD_DIR"
 
 python3 "$ROOT/tools/verify_translations.py"
+python3 "$ROOT/tools/test_language_switching.py"
 python3 "$ROOT/tools/generate_translations.py"
 
 SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -29,6 +30,7 @@ CLANG="$(xcrun --sdk iphoneos --find clang)"
   -Wl,-install_name,@rpath/WhitegramArabic.dylib \
   "$ROOT/Sources/Tweak.m" \
   "$ROOT/Sources/WGTranslations.m" \
+  "$ROOT/Sources/WGLanguageOverlay.m" \
   -I"$ROOT/Sources" \
   -o "$BUILD_DIR/WhitegramArabic.dylib"
 

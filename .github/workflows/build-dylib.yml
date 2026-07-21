@@ -1,4 +1,4 @@
-name: Build Whitegram Arabic Dylib
+name: Build Whitegram Languages Dylib
 
 on:
   workflow_dispatch:
@@ -41,8 +41,10 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Validate Arabic coverage
-        run: python3 tools/verify_translations.py
+      - name: Validate multilingual coverage
+        run: |
+          python3 tools/verify_translations.py
+          python3 tools/test_language_switching.py
 
       - name: Build arm64 dylib
         run: |
@@ -61,7 +63,7 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: WhitegramArabic-dylib
+          name: WhitegramLanguages-v4
           path: |
             build/WhitegramArabic.dylib
             build/SHA256.txt

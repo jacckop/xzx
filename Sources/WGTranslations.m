@@ -1,98 +1,296 @@
 #import "WGTranslations.h"
 #include "GeneratedTranslations.inc"
 
-static NSDictionary<NSString *, NSString *> *WGTranslationTable(void) {
-    static NSDictionary<NSString *, NSString *> *table;
+NSString * const WGLanguageDidChangeNotification = @"com.ikiraplus.whitegramlanguages.languageChanged";
+
+static NSString * const WGSelectedLanguageDefaultsKey = @"WGSelectedLanguage";
+static NSString * const WGLocalizationEnabledDefaultsKey = @"WGLocalizationEnabled";
+
+static NSSet<NSString *> *WGSupportedLanguageCodes(void) {
+    static NSSet<NSString *> *codes;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        table = WGGeneratedTranslations();
+        codes = [NSSet setWithArray:@[@"ar", @"en", @"es", @"fa", @"fr", @"pt"]];
     });
-    return table;
+    return codes;
 }
 
-static NSDictionary<NSString *, NSString *> *WGLowercaseTranslationTable(void) {
-    static NSDictionary<NSString *, NSString *> *table;
+static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *WGAllTranslationTables(void) {
+    static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *tables;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tables = WGGeneratedTranslationTables();
+    });
+    return tables;
+}
+
+static NSSet<NSString *> *WGCanonicalSourceStrings(void) {
+    static NSSet<NSString *> *sourceStrings;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableSet<NSString *> *keys = [NSMutableSet set];
+        [WGAllTranslationTables() enumerateKeysAndObjectsUsingBlock:^(NSString *language,
+                                                                      NSDictionary<NSString *,NSString *> *table,
+                                                                      BOOL *stop) {
+            [keys addObjectsFromArray:table.allKeys];
+        }];
+        sourceStrings = [keys copy];
+    });
+    return sourceStrings;
+}
+
+static NSDictionary<NSString *, NSString *> *WGCaseInsensitiveCanonicalSourceMap(void) {
+    static NSDictionary<NSString *, NSString *> *map;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         NSMutableDictionary<NSString *, NSString *> *result = [NSMutableDictionary dictionary];
-        [WGTranslationTable() enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
-            NSString *lower = key.lowercaseString;
-            if (!result[lower]) {
-                result[lower] = value;
+        for (NSString *source in WGCanonicalSourceStrings()) {
+            NSString *folded = source.lowercaseString;
+            if (!result[folded]) {
+                result[folded] = source;
             }
-        }];
-        table = [result copy];
+        }
+        map = [result copy];
     });
-    return table;
+    return map;
 }
 
-BOOL WGArabicLocalizationEnabled(void) {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    id explicitValue = [defaults objectForKey:@"WGArabicLocalizationEnabled"];
-    if (explicitValue != nil) {
-        return [explicitValue boolValue];
-    }
-    return YES;
-}
-
-static NSString *WGApplyRegexRules(NSString *input) {
-    static NSArray<NSDictionary<NSString *, id> *> *rules;
+static NSDictionary<NSString *, NSString *> *WGExactReverseTranslationMap(void) {
+    static NSDictionary<NSString *, NSString *> *map;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSArray<NSArray<NSString *> *> *rawRules = @[
-            @[@"^Account \\\"(.+)\\\" is already added\\.$", @"الحساب «$1» مضاف مسبقاً."],
-            @[@"^Restored accounts: ([0-9]+)$", @"الحسابات المستعادة: $1"],
-            @[@"^([0-9]+) account\\(s\\) saved to Keychain$", @"تم حفظ $1 حساب في سلسلة المفاتيح"],
-            @[@"^([0-9]+) messages will be restored and visible in the chat again\\.$", @"ستُستعاد $1 رسالة وتظهر مجدداً في المحادثة."],
-            @[@"^Font changed: (.+)\\. Restart Whitegram$", @"تم تغيير الخط إلى $1. أعد تشغيل وايت كرام"],
-            @[@"^Font selected: (.+)\\. Restart Whitegram$", @"تم اختيار الخط $1. أعد تشغيل وايت كرام"],
-            @[@"^Restored ([0-9]+) messages \\(([0-9]+) new\\)\\.$", @"تمت استعادة $1 رسالة ($2 جديدة)."],
-            @[@"^Restored ([0-9]+) settings\\. Restart Whitegram$", @"تمت استعادة $1 إعداد. أعد تشغيل وايت كرام"],
-            @[@"^Downloading ([0-9]+)%$", @"جارٍ التنزيل $1٪"],
-            @[@"^([0-9]+) of ([0-9]+) engines$", @"$1 من أصل $2 محرّك"],
-            @[@"^Objects found: ([0-9]+)$", @"العناصر المكتشفة: $1"],
-            @[@"^Done: ([0-9]+) messages$", @"تم: $1 رسالة"],
-            @[@"^Total messages: ([0-9]+)$", @"إجمالي الرسائل: $1"],
-            @[@"^Wallpaper add error: code ([0-9]+)$", @"خطأ في إضافة الخلفية: الرمز $1"],
-            @[@"^Restored ([0-9]+) msg\\. from backup\\.$", @"تمت استعادة $1 رسالة من النسخة الاحتياطية."],
-            @[@"^Showing lyrics for (.+)$", @"عرض كلمات $1"],
-            @[@"^Network error: (.+)$", @"خطأ في الشبكة: $1"],
-            @[@"^Selected: (.+)$", @"المحدد: $1"],
-            @[@"^Show ([0-9]+) more$", @"إظهار $1 إضافية"],
-            @[@"^([0-9]+) / 8 lines$", @"$1 / 8 أسطر"],
-            @[@"^([0-9]+) msg\\.$", @"$1 رسالة"],
-            @[@"^Restore \\\"(.+)\\\"\\?$", @"استعادة «$1»؟"],
-            @[@"^No response from the model\\.$", @"لم يردّ النموذج."],
-        ];
-
-        NSMutableArray<NSDictionary<NSString *, id> *> *compiled = [NSMutableArray arrayWithCapacity:rawRules.count];
-        for (NSArray<NSString *> *rawRule in rawRules) {
-            NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:rawRule[0]
-                                                                                  options:0
-                                                                                    error:nil];
-            if (regex) {
-                [compiled addObject:@{@"regex": regex, @"replacement": rawRule[1]}];
-            }
-        }
-        rules = [compiled copy];
+        NSMutableDictionary<NSString *, NSString *> *result = [NSMutableDictionary dictionary];
+        [WGAllTranslationTables() enumerateKeysAndObjectsUsingBlock:^(NSString *language,
+                                                                      NSDictionary<NSString *,NSString *> *table,
+                                                                      BOOL *stop) {
+            [table enumerateKeysAndObjectsUsingBlock:^(NSString *source, NSString *translated, BOOL *innerStop) {
+                if (translated.length == 0) {
+                    return;
+                }
+                if ([translated isEqualToString:source]) {
+                    result[translated] = source;
+                } else if (!result[translated]) {
+                    result[translated] = source;
+                }
+            }];
+        }];
+        map = [result copy];
     });
-
-    NSRange fullRange = NSMakeRange(0, input.length);
-    for (NSDictionary<NSString *, id> *rule in rules) {
-        NSRegularExpression *regex = rule[@"regex"];
-        NSString *replacement = rule[@"replacement"];
-        if ([regex firstMatchInString:input options:0 range:fullRange]) {
-            return [regex stringByReplacingMatchesInString:input
-                                                   options:0
-                                                     range:fullRange
-                                              withTemplate:replacement];
-        }
-    }
-    return input;
+    return map;
 }
 
-NSString *WGArabicTranslateString(NSString *input) {
-    if (!WGArabicLocalizationEnabled() || input.length == 0) {
+static NSDictionary<NSString *, NSString *> *WGCaseInsensitiveReverseTranslationMap(void) {
+    static NSDictionary<NSString *, NSString *> *map;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableDictionary<NSString *, NSString *> *result = [NSMutableDictionary dictionary];
+        [WGExactReverseTranslationMap() enumerateKeysAndObjectsUsingBlock:^(NSString *translated,
+                                                                            NSString *source,
+                                                                            BOOL *stop) {
+            NSString *folded = translated.lowercaseString;
+            if (!result[folded]) {
+                result[folded] = source;
+            }
+        }];
+        map = [result copy];
+    });
+    return map;
+}
+
+BOOL WGLocalizationEnabled(void) {
+    id explicitValue = [NSUserDefaults.standardUserDefaults objectForKey:WGLocalizationEnabledDefaultsKey];
+    return explicitValue ? [explicitValue boolValue] : YES;
+}
+
+NSString *WGSelectedLanguageCode(void) {
+    NSString *stored = [NSUserDefaults.standardUserDefaults stringForKey:WGSelectedLanguageDefaultsKey];
+    if (![WGSupportedLanguageCodes() containsObject:stored]) {
+        return @"ar";
+    }
+    return stored;
+}
+
+void WGSetSelectedLanguageCode(NSString *languageCode) {
+    if (![WGSupportedLanguageCodes() containsObject:languageCode]) {
+        return;
+    }
+    NSString *oldValue = WGSelectedLanguageCode();
+    if ([oldValue isEqualToString:languageCode]) {
+        return;
+    }
+    [NSUserDefaults.standardUserDefaults setObject:languageCode forKey:WGSelectedLanguageDefaultsKey];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    [NSNotificationCenter.defaultCenter postNotificationName:WGLanguageDidChangeNotification
+                                                       object:nil
+                                                     userInfo:@{@"language": languageCode}];
+}
+
+BOOL WGSelectedLanguageIsRTL(void) {
+    NSString *code = WGSelectedLanguageCode();
+    return [code isEqualToString:@"ar"] || [code isEqualToString:@"fa"];
+}
+
+UISemanticContentAttribute WGSelectedSemanticContentAttribute(void) {
+    return WGSelectedLanguageIsRTL()
+        ? UISemanticContentAttributeForceRightToLeft
+        : UISemanticContentAttributeForceLeftToRight;
+}
+
+NSTextAlignment WGSelectedTextAlignment(void) {
+    return WGSelectedLanguageIsRTL() ? NSTextAlignmentRight : NSTextAlignmentLeft;
+}
+
+static NSString *WGCanonicalSourceForString(NSString *value) {
+    if (value.length == 0) {
+        return value;
+    }
+
+    if ([WGCanonicalSourceStrings() containsObject:value]) {
+        return value;
+    }
+
+    NSString *source = WGExactReverseTranslationMap()[value];
+    if (source) {
+        return source;
+    }
+
+    source = WGCaseInsensitiveCanonicalSourceMap()[value.lowercaseString];
+    if (source) {
+        return source;
+    }
+
+    source = WGCaseInsensitiveReverseTranslationMap()[value.lowercaseString];
+    return source ?: value;
+}
+
+static NSDictionary<NSString *, NSArray<NSArray<NSString *> *> *> *WGDynamicRuleTemplates(void) {
+    static NSDictionary<NSString *, NSArray<NSArray<NSString *> *> *> *templates;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        templates = @{
+            @"ar": @[
+                @[@"^Account \"(.+)\" is already added\\.$", @"الحساب «$1» مضاف مسبقاً."],
+                @[@"^Restored accounts: ([0-9]+)$", @"الحسابات المستعادة: $1"],
+                @[@"^([0-9]+) account\\(s\\) saved to Keychain$", @"تم حفظ $1 حساب في سلسلة المفاتيح"],
+                @[@"^([0-9]+) messages will be restored and visible in the chat again\\.$", @"ستُستعاد $1 رسالة وتظهر مجدداً في المحادثة."],
+                @[@"^Font changed: (.+)\\. Restart Whitegram$", @"تم تغيير الخط إلى $1. أعد تشغيل وايت كرام"],
+                @[@"^Font selected: (.+)\\. Restart Whitegram$", @"تم اختيار الخط $1. أعد تشغيل وايت كرام"],
+                @[@"^Restored ([0-9]+) messages \\(([0-9]+) new\\)\\.$", @"تمت استعادة $1 رسالة ($2 جديدة)."],
+                @[@"^Restored ([0-9]+) settings\\. Restart Whitegram$", @"تمت استعادة $1 إعداد. أعد تشغيل وايت كرام"],
+                @[@"^Downloading ([0-9]+)%$", @"جارٍ التنزيل $1٪"],
+                @[@"^([0-9]+) of ([0-9]+) engines$", @"$1 من أصل $2 محرّك"],
+                @[@"^Objects found: ([0-9]+)$", @"العناصر المكتشفة: $1"],
+                @[@"^Done: ([0-9]+) messages$", @"تم: $1 رسالة"],
+                @[@"^Total messages: ([0-9]+)$", @"إجمالي الرسائل: $1"],
+                @[@"^Network error: (.+)$", @"خطأ في الشبكة: $1"],
+                @[@"^Selected: (.+)$", @"المحدد: $1"],
+                @[@"^Show ([0-9]+) more$", @"إظهار $1 إضافية"],
+                @[@"^([0-9]+) msg\\.$", @"$1 رسالة"],
+            ],
+            @"es": @[
+                @[@"^Account \"(.+)\" is already added\\.$", @"La cuenta «$1» ya está añadida."],
+                @[@"^Restored accounts: ([0-9]+)$", @"Cuentas restauradas: $1"],
+                @[@"^([0-9]+) account\\(s\\) saved to Keychain$", @"$1 cuenta(s) guardada(s) en el Llavero"],
+                @[@"^([0-9]+) messages will be restored and visible in the chat again\\.$", @"Se restaurarán $1 mensajes y volverán a ser visibles en el chat."],
+                @[@"^Font changed: (.+)\\. Restart Whitegram$", @"Fuente cambiada: $1. Reinicia Whitegram"],
+                @[@"^Font selected: (.+)\\. Restart Whitegram$", @"Fuente seleccionada: $1. Reinicia Whitegram"],
+                @[@"^Restored ([0-9]+) messages \\(([0-9]+) new\\)\\.$", @"Se restauraron $1 mensajes ($2 nuevos)."],
+                @[@"^Restored ([0-9]+) settings\\. Restart Whitegram$", @"Se restauraron $1 ajustes. Reinicia Whitegram"],
+                @[@"^Downloading ([0-9]+)%$", @"Descargando $1 %"],
+                @[@"^([0-9]+) of ([0-9]+) engines$", @"$1 de $2 motores"],
+                @[@"^Objects found: ([0-9]+)$", @"Objetos encontrados: $1"],
+                @[@"^Done: ([0-9]+) messages$", @"Completado: $1 mensajes"],
+                @[@"^Total messages: ([0-9]+)$", @"Mensajes totales: $1"],
+                @[@"^Network error: (.+)$", @"Error de red: $1"],
+                @[@"^Selected: (.+)$", @"Seleccionado: $1"],
+                @[@"^Show ([0-9]+) more$", @"Mostrar $1 más"],
+                @[@"^([0-9]+) msg\\.$", @"$1 mens."],
+            ],
+            @"fa": @[
+                @[@"^Account \"(.+)\" is already added\\.$", @"حساب «$1» قبلاً افزوده شده است."],
+                @[@"^Restored accounts: ([0-9]+)$", @"حساب‌های بازیابی‌شده: $1"],
+                @[@"^([0-9]+) account\\(s\\) saved to Keychain$", @"$1 حساب در Keychain ذخیره شد"],
+                @[@"^([0-9]+) messages will be restored and visible in the chat again\\.$", @"$1 پیام بازیابی می‌شود و دوباره در گفتگو نمایش داده خواهد شد."],
+                @[@"^Font changed: (.+)\\. Restart Whitegram$", @"فونت تغییر کرد: $1. وایت‌گرام را دوباره اجرا کنید"],
+                @[@"^Font selected: (.+)\\. Restart Whitegram$", @"فونت انتخاب شد: $1. وایت‌گرام را دوباره اجرا کنید"],
+                @[@"^Restored ([0-9]+) messages \\(([0-9]+) new\\)\\.$", @"$1 پیام بازیابی شد ($2 پیام جدید)."],
+                @[@"^Restored ([0-9]+) settings\\. Restart Whitegram$", @"$1 تنظیم بازیابی شد. وایت‌گرام را دوباره اجرا کنید"],
+                @[@"^Downloading ([0-9]+)%$", @"در حال دانلود $1٪"],
+                @[@"^([0-9]+) of ([0-9]+) engines$", @"$1 از $2 موتور"],
+                @[@"^Objects found: ([0-9]+)$", @"موارد یافت‌شده: $1"],
+                @[@"^Done: ([0-9]+) messages$", @"انجام شد: $1 پیام"],
+                @[@"^Total messages: ([0-9]+)$", @"مجموع پیام‌ها: $1"],
+                @[@"^Network error: (.+)$", @"خطای شبکه: $1"],
+                @[@"^Selected: (.+)$", @"انتخاب‌شده: $1"],
+                @[@"^Show ([0-9]+) more$", @"نمایش $1 مورد بیشتر"],
+                @[@"^([0-9]+) msg\\.$", @"$1 پیام"],
+            ],
+            @"fr": @[
+                @[@"^Account \"(.+)\" is already added\\.$", @"Le compte «$1» est déjà ajouté."],
+                @[@"^Restored accounts: ([0-9]+)$", @"Comptes restaurés : $1"],
+                @[@"^([0-9]+) account\\(s\\) saved to Keychain$", @"$1 compte(s) enregistré(s) dans le Trousseau"],
+                @[@"^([0-9]+) messages will be restored and visible in the chat again\\.$", @"$1 messages seront restaurés et de nouveau visibles dans la discussion."],
+                @[@"^Font changed: (.+)\\. Restart Whitegram$", @"Police modifiée : $1. Redémarrez Whitegram"],
+                @[@"^Font selected: (.+)\\. Restart Whitegram$", @"Police sélectionnée : $1. Redémarrez Whitegram"],
+                @[@"^Restored ([0-9]+) messages \\(([0-9]+) new\\)\\.$", @"$1 messages restaurés ($2 nouveaux)."],
+                @[@"^Restored ([0-9]+) settings\\. Restart Whitegram$", @"$1 réglages restaurés. Redémarrez Whitegram"],
+                @[@"^Downloading ([0-9]+)%$", @"Téléchargement $1 %"],
+                @[@"^([0-9]+) of ([0-9]+) engines$", @"$1 moteurs sur $2"],
+                @[@"^Objects found: ([0-9]+)$", @"Objets trouvés : $1"],
+                @[@"^Done: ([0-9]+) messages$", @"Terminé : $1 messages"],
+                @[@"^Total messages: ([0-9]+)$", @"Total des messages : $1"],
+                @[@"^Network error: (.+)$", @"Erreur réseau : $1"],
+                @[@"^Selected: (.+)$", @"Sélectionné : $1"],
+                @[@"^Show ([0-9]+) more$", @"Afficher $1 de plus"],
+                @[@"^([0-9]+) msg\\.$", @"$1 msg."],
+            ],
+            @"pt": @[
+                @[@"^Account \"(.+)\" is already added\\.$", @"A conta «$1» já foi adicionada."],
+                @[@"^Restored accounts: ([0-9]+)$", @"Contas restauradas: $1"],
+                @[@"^([0-9]+) account\\(s\\) saved to Keychain$", @"$1 conta(s) salva(s) nas Chaves"],
+                @[@"^([0-9]+) messages will be restored and visible in the chat again\\.$", @"$1 mensagens serão restauradas e voltarão a ficar visíveis no chat."],
+                @[@"^Font changed: (.+)\\. Restart Whitegram$", @"Fonte alterada: $1. Reinicie o Whitegram"],
+                @[@"^Font selected: (.+)\\. Restart Whitegram$", @"Fonte selecionada: $1. Reinicie o Whitegram"],
+                @[@"^Restored ([0-9]+) messages \\(([0-9]+) new\\)\\.$", @"$1 mensagens restauradas ($2 novas)."],
+                @[@"^Restored ([0-9]+) settings\\. Restart Whitegram$", @"$1 ajustes restaurados. Reinicie o Whitegram"],
+                @[@"^Downloading ([0-9]+)%$", @"Baixando $1%"],
+                @[@"^([0-9]+) of ([0-9]+) engines$", @"$1 de $2 mecanismos"],
+                @[@"^Objects found: ([0-9]+)$", @"Objetos encontrados: $1"],
+                @[@"^Done: ([0-9]+) messages$", @"Concluído: $1 mensagens"],
+                @[@"^Total messages: ([0-9]+)$", @"Total de mensagens: $1"],
+                @[@"^Network error: (.+)$", @"Erro de rede: $1"],
+                @[@"^Selected: (.+)$", @"Selecionado: $1"],
+                @[@"^Show ([0-9]+) more$", @"Mostrar mais $1"],
+                @[@"^([0-9]+) msg\\.$", @"$1 msg."],
+            ],
+        };
+    });
+    return templates;
+}
+
+static NSString *WGApplyDynamicRules(NSString *canonicalInput, NSString *languageCode) {
+    NSArray<NSArray<NSString *> *> *rules = WGDynamicRuleTemplates()[languageCode];
+    if (rules.count == 0) {
+        return canonicalInput;
+    }
+
+    NSRange fullRange = NSMakeRange(0, canonicalInput.length);
+    for (NSArray<NSString *> *rule in rules) {
+        NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:rule[0]
+                                                                              options:0
+                                                                                error:nil];
+        if ([regex firstMatchInString:canonicalInput options:0 range:fullRange]) {
+            return [regex stringByReplacingMatchesInString:canonicalInput
+                                                   options:0
+                                                     range:fullRange
+                                              withTemplate:rule[1]];
+        }
+    }
+    return canonicalInput;
+}
+
+NSString *WGTranslateString(NSString *input) {
+    if (!WGLocalizationEnabled() || input.length == 0) {
         return input;
     }
 
@@ -110,48 +308,78 @@ NSString *WGArabicTranslateString(NSString *input) {
     NSString *prefix = [input substringToIndex:start];
     NSString *core = [input substringWithRange:NSMakeRange(start, end - start)];
     NSString *suffix = [input substringFromIndex:end];
+    NSString *canonical = WGCanonicalSourceForString(core);
 
-    NSString *translated = WGTranslationTable()[core];
-    if (!translated) {
-        translated = WGLowercaseTranslationTable()[core.lowercaseString];
-    }
+    static NSDictionary<NSString *, NSString *> *englishAliases;
+    static dispatch_once_t aliasOnceToken;
+    dispatch_once(&aliasOnceToken, ^{
+        englishAliases = @{
+            @"Найти опцию...": @"Find option...",
+            @"Поиск настроек": @"Search settings",
+        };
+    });
+    canonical = englishAliases[canonical] ?: canonical;
 
-    if (!translated && core.length > 1) {
-        unichar last = [core characterAtIndex:core.length - 1];
-        if (last == ':' || last == '?' || last == '!' || last == '.') {
-            NSString *base = [core substringToIndex:core.length - 1];
-            NSString *baseTranslation = WGTranslationTable()[base];
-            if (baseTranslation) {
-                NSString *punctuation = [core substringFromIndex:core.length - 1];
-                translated = [baseTranslation stringByAppendingString:punctuation];
+    NSString *languageCode = WGSelectedLanguageCode();
+    NSString *translated = canonical;
+    if (![languageCode isEqualToString:@"en"]) {
+        translated = WGAllTranslationTables()[languageCode][canonical];
+        if (!translated && canonical.length > 1) {
+            unichar last = [canonical characterAtIndex:canonical.length - 1];
+            if (last == ':' || last == '?' || last == '!' || last == '.') {
+                NSString *base = [canonical substringToIndex:canonical.length - 1];
+                NSString *baseTranslation = WGAllTranslationTables()[languageCode][base];
+                if (baseTranslation) {
+                    translated = [baseTranslation stringByAppendingString:[canonical substringFromIndex:canonical.length - 1]];
+                }
             }
         }
-    }
-
-    if (!translated) {
-        translated = WGApplyRegexRules(core);
+        if (!translated) {
+            translated = WGApplyDynamicRules(canonical, languageCode);
+        }
+        if (!translated) {
+            translated = canonical;
+        }
     }
 
     if ([translated isEqualToString:core]) {
         return input;
     }
-
     return [NSString stringWithFormat:@"%@%@%@", prefix, translated, suffix];
 }
 
-NSAttributedString *WGArabicTranslateAttributedString(NSAttributedString *input) {
-    if (!WGArabicLocalizationEnabled() || input.length == 0) {
+NSAttributedString *WGTranslateAttributedString(NSAttributedString *input) {
+    if (!WGLocalizationEnabled() || input.length == 0) {
         return input;
     }
 
-    NSString *translated = WGArabicTranslateString(input.string);
+    NSString *translated = WGTranslateString(input.string);
     if ([translated isEqualToString:input.string]) {
         return input;
     }
 
-    NSDictionary<NSAttributedStringKey, id> *attributes = @{};
-    if (input.length > 0) {
-        attributes = [input attributesAtIndex:0 effectiveRange:nil] ?: @{};
-    }
-    return [[NSAttributedString alloc] initWithString:translated attributes:attributes];
+    NSDictionary<NSAttributedStringKey, id> *attributes = input.length > 0
+        ? ([input attributesAtIndex:0 effectiveRange:nil] ?: @{})
+        : @{};
+    NSMutableDictionary<NSAttributedStringKey, id> *adjusted = [attributes mutableCopy];
+    NSMutableParagraphStyle *paragraph = [adjusted[NSParagraphStyleAttributeName] mutableCopy]
+        ?: [NSMutableParagraphStyle new];
+    paragraph.alignment = WGSelectedTextAlignment();
+    paragraph.baseWritingDirection = WGSelectedLanguageIsRTL()
+        ? NSWritingDirectionRightToLeft
+        : NSWritingDirectionLeftToRight;
+    adjusted[NSParagraphStyleAttributeName] = paragraph;
+    return [[NSAttributedString alloc] initWithString:translated attributes:adjusted];
+}
+
+BOOL WGArabicLocalizationEnabled(void) {
+    return WGLocalizationEnabled();
+}
+
+NSString *WGArabicTranslateString(NSString *input) {
+    return WGTranslateString(input);
+}
+
+NSAttributedString *WGArabicTranslateAttributedString(NSAttributedString *input) {
+    return WGTranslateAttributedString(input);
 }

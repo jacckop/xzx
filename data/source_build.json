@@ -5,5 +5,19 @@
   "build_version": "55",
   "framework_sha256": "b13c18355a1b3ef8c0b3c4e080965c2469150c5d0699ca19724dd33c5356d06f",
   "verified_extracted_strings": 698,
-  "dictionary_entries": 699
+  "dictionary_entries": 742,
+  "supplemental_visible_strings": 44,
+  "runtime_fix": "Texture/AsyncDisplayKit visible node scanner",
+  "version": "4.0.0",
+  "dictionary_entries_per_language": 742,
+  "translated_languages": [
+    "ar",
+    "es",
+    "fa",
+    "fr",
+    "pt"
+  ],
+  "source_language": "en",
+  "language_selector": "movable floating overlay",
+  "credit": "@iKiraPlus"
 }

@@ -1,265 +1,459 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
+#import <dlfcn.h>
 #import "WGTranslations.h"
+#import "WGLanguageOverlay.h"
 
 /*
- * WhitegramArabic Safe Runtime v3
+ * WhitegramLanguages Overlay v4
  *
- * This build deliberately avoids:
- *   - scanning every Objective-C/Swift class in the app;
- *   - replacing arbitrary setters based only on their selector name;
- *   - hooking NSAttributedString class-cluster initializers.
+ * Whitegram's settings rows are drawn by Telegram's Texture/AsyncDisplayKit
+ * text nodes. Their Swift attributedText property is not exposed as an
+ * Objective-C setAttributedText: selector, so Safe v2 could translate page
+ * titles but not the rows themselves.
  *
- * Those broad hooks can corrupt unrelated Telegram objects after login.
- * Only stable UIKit entry points and a small allow-list of Telegram text
- * classes are touched here.
+ * This build keeps the stable UIKit hooks and adds a narrowly-scoped visible
+ * node scanner. It only reads the known `attributedText` ivar from exact
+ * Telegram text-node classes, replaces it when the complete source string is
+ * present in our dictionary, then asks that node to redraw. It does not scan
+ * every app class and it does not hook Swift initializers or login objects.
  */
 
-static NSMutableDictionary<NSString *, NSValue *> *WGOriginalIMPs(void) {
-    static NSMutableDictionary<NSString *, NSValue *> *table;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        table = [NSMutableDictionary dictionary];
-    });
-    return table;
+#pragma mark - Runtime helpers
+
+static void WGSendVoid(id object, SEL selector) {
+    if (object && [object respondsToSelector:selector]) {
+        ((void (*)(id, SEL))objc_msgSend)(object, selector);
+    }
 }
 
-static NSMutableSet<NSString *> *WGInstalledHooks(void) {
-    static NSMutableSet<NSString *> *set;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        set = [NSMutableSet set];
-    });
-    return set;
+static id WGSendObject(id object, SEL selector) {
+    if (object && [object respondsToSelector:selector]) {
+        return ((id (*)(id, SEL))objc_msgSend)(object, selector);
+    }
+    return nil;
 }
 
-static NSString *WGHookKey(Class cls, SEL selector) {
-    return [NSString stringWithFormat:@"%@::%@", NSStringFromClass(cls), NSStringFromSelector(selector)];
-}
-
-static IMP WGFindOriginalIMP(id object, SEL selector) {
-    Class cursor = object_getClass(object);
+static Ivar WGFindIvar(Class cls, const char *name) {
+    Class cursor = cls;
     while (cursor) {
-        NSValue *boxed = WGOriginalIMPs()[WGHookKey(cursor, selector)];
-        if (boxed) {
-            return boxed.pointerValue;
+        Ivar ivar = class_getInstanceVariable(cursor, name);
+        if (ivar) {
+            return ivar;
         }
         cursor = class_getSuperclass(cursor);
     }
     return NULL;
 }
 
-static BOOL WGMethodIsVoidObjectSetter(Method method) {
-    if (!method || method_getNumberOfArguments(method) != 3) {
-        return NO;
-    }
+typedef void (*WGStrongIvarSetter)(id object, Ivar ivar, id value);
 
-    char returnType[32] = {0};
-    char argumentType[32] = {0};
-    method_getReturnType(method, returnType, sizeof(returnType));
-    method_getArgumentType(method, 2, argumentType, sizeof(argumentType));
+static void WGSetStrongObjectIvar(id object, Ivar ivar, id value) {
+    static WGStrongIvarSetter strongSetter = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        strongSetter = (WGStrongIvarSetter)dlsym(RTLD_DEFAULT, "object_setIvarWithStrongDefault");
+    });
 
-    return returnType[0] == 'v' && argumentType[0] == '@';
-}
-
-static BOOL WGReplaceSafeObjectSetter(Class cls, SEL selector, IMP replacement) {
-    if (!cls || !selector || !replacement) {
-        return NO;
-    }
-
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!WGMethodIsVoidObjectSetter(method)) {
-        return NO;
-    }
-
-    NSString *key = WGHookKey(cls, selector);
-    @synchronized (WGInstalledHooks()) {
-        if ([WGInstalledHooks() containsObject:key]) {
-            return YES;
-        }
-
-        IMP original = method_getImplementation(method);
-        const char *types = method_getTypeEncoding(method);
-        if (!original || !types) {
-            return NO;
-        }
-
-        // Add an override when the method is inherited. Otherwise replace only
-        // the implementation owned by this exact class.
-        if (!class_addMethod(cls, selector, replacement, types)) {
-            class_replaceMethod(cls, selector, replacement, types);
-        }
-
-        WGOriginalIMPs()[key] = [NSValue valueWithPointer:original];
-        [WGInstalledHooks() addObject:key];
-        return YES;
+    if (strongSetter) {
+        strongSetter(object, ivar, value);
+    } else {
+        object_setIvar(object, ivar, value);
     }
 }
 
-static id WGTranslateObject(id value) {
-    if ([value isKindOfClass:NSString.class]) {
-        return WGArabicTranslateString((NSString *)value);
-    }
-    if ([value isKindOfClass:NSAttributedString.class]) {
-        return WGArabicTranslateAttributedString((NSAttributedString *)value);
-    }
-    return value;
+static BOOL WGObjectIsKindOfRuntimeClass(id object, const char *className) {
+    Class cls = objc_getClass(className);
+    return cls && object && [object isKindOfClass:cls];
 }
 
-static void WGSafeObjectSetter(id self, SEL _cmd, id value) {
-    IMP original = WGFindOriginalIMP(self, _cmd);
-    if (!original) {
+static BOOL WGIsKnownTextRenderable(id object) {
+    if (!object) {
+        return NO;
+    }
+
+    return WGObjectIsKindOfRuntimeClass(object, "_TtC7Display17ImmediateTextNode") ||
+           WGObjectIsKindOfRuntimeClass(object, "_TtC20TextNodeWithEntities29ImmediateTextNodeWithEntities") ||
+           WGObjectIsKindOfRuntimeClass(object, "_TtC7Display17ImmediateTextView") ||
+           WGObjectIsKindOfRuntimeClass(object, "_TtCC22MultilineTextComponent22MultilineTextComponent4View") ||
+           WGObjectIsKindOfRuntimeClass(object, "_TtCC13ComponentFlow4TextP33_C336015A3F4BB8AB8C7F5EBEFE5DB6BF12MeasureState");
+}
+
+static void WGRefreshRenderable(id object) {
+    if (!object) {
         return;
     }
-    ((void (*)(id, SEL, id))original)(self, _cmd, WGTranslateObject(value));
+
+    WGSendVoid(object, NSSelectorFromString(@"invalidateCalculatedLayout"));
+    WGSendVoid(object, NSSelectorFromString(@"setNeedsLayout"));
+    WGSendVoid(object, NSSelectorFromString(@"setNeedsDisplay"));
+    WGSendVoid(object, NSSelectorFromString(@"__setNeedsLayout"));
+    WGSendVoid(object, NSSelectorFromString(@"__setNeedsDisplay"));
+
+    id view = WGSendObject(object, NSSelectorFromString(@"view"));
+    if ([view isKindOfClass:UIView.class]) {
+        [(UIView *)view setNeedsLayout];
+        [(UIView *)view setNeedsDisplay];
+    }
+}
+
+static BOOL WGTranslateAttributedTextIvar(id object) {
+    if (!WGIsKnownTextRenderable(object)) {
+        return NO;
+    }
+
+    Ivar ivar = WGFindIvar(object_getClass(object), "attributedText");
+    if (!ivar) {
+        return NO;
+    }
+
+    id value = object_getIvar(object, ivar);
+    if (![value isKindOfClass:NSAttributedString.class]) {
+        return NO;
+    }
+
+    NSAttributedString *source = (NSAttributedString *)value;
+    NSAttributedString *translated = WGTranslateAttributedString(source);
+    if (!translated || [translated.string isEqualToString:source.string]) {
+        return NO;
+    }
+
+    WGSetStrongObjectIvar(object, ivar, translated);
+    WGRefreshRenderable(object);
+    return YES;
+}
+
+static void WGTranslateComponentTextView(id view) {
+    if (!WGObjectIsKindOfRuntimeClass(view, "_TtCC13ComponentFlow4Text4View")) {
+        return;
+    }
+
+    Ivar stateIvar = WGFindIvar(object_getClass(view), "measureState");
+    if (!stateIvar) {
+        return;
+    }
+
+    id state = object_getIvar(view, stateIvar);
+    if (WGTranslateAttributedTextIvar(state)) {
+        WGRefreshRenderable(view);
+    }
+}
+
+#pragma mark - Visible Texture node scanner
+
+static void WGScanDisplayNode(id node, NSMutableSet<NSValue *> *visited, NSUInteger depth) {
+    if (!node || depth > 80 || visited.count > 3000) {
+        return;
+    }
+
+    NSValue *identity = [NSValue valueWithPointer:(__bridge const void *)node];
+    if ([visited containsObject:identity]) {
+        return;
+    }
+    [visited addObject:identity];
+
+    WGTranslateAttributedTextIvar(node);
+
+    id subnodes = WGSendObject(node, NSSelectorFromString(@"subnodes"));
+    if ([subnodes isKindOfClass:NSArray.class]) {
+        for (id child in (NSArray *)subnodes) {
+            WGScanDisplayNode(child, visited, depth + 1);
+        }
+    }
+}
+
+static BOOL WGIsOverlayObject(id object) {
+    if (!object) {
+        return NO;
+    }
+    NSString *name = NSStringFromClass([object class]);
+    return [name hasPrefix:@"WGNoTranslate"] ||
+           [name isEqualToString:@"WGPassThroughWindow"] ||
+           [name isEqualToString:@"WGOverlayRootController"] ||
+           [name hasPrefix:@"WGLanguageOverlay"];
+}
+
+static void WGApplySelectedDirectionToView(UIView *view) {
+    view.semanticContentAttribute = WGSelectedSemanticContentAttribute();
+    if ([view isKindOfClass:UILabel.class]) {
+        ((UILabel *)view).textAlignment = WGSelectedTextAlignment();
+    } else if ([view isKindOfClass:UITextField.class]) {
+        ((UITextField *)view).textAlignment = WGSelectedTextAlignment();
+    } else if ([view isKindOfClass:UITextView.class]) {
+        ((UITextView *)view).textAlignment = WGSelectedTextAlignment();
+    }
+}
+
+static void WGTranslateExistingUIKitView(UIView *view) {
+    if (WGIsOverlayObject(view)) {
+        return;
+    }
+
+    if ([view isKindOfClass:UILabel.class]) {
+        UILabel *label = (UILabel *)view;
+        if (label.attributedText.length > 0) {
+            NSAttributedString *translated = WGTranslateAttributedString(label.attributedText);
+            if (![translated.string isEqualToString:label.attributedText.string]) {
+                label.attributedText = translated;
+                WGApplySelectedDirectionToView(label);
+            }
+        } else if (label.text.length > 0) {
+            NSString *translated = WGTranslateString(label.text);
+            if (![translated isEqualToString:label.text]) {
+                label.text = translated;
+                WGApplySelectedDirectionToView(label);
+            }
+        }
+    } else if ([view isKindOfClass:UITextField.class]) {
+        UITextField *field = (UITextField *)view;
+        if (field.placeholder.length > 0) {
+            NSString *translated = WGTranslateString(field.placeholder);
+            if (![translated isEqualToString:field.placeholder]) {
+                field.placeholder = translated;
+                WGApplySelectedDirectionToView(field);
+            }
+        }
+    } else if ([view isKindOfClass:UISearchBar.class]) {
+        UISearchBar *searchBar = (UISearchBar *)view;
+        if (searchBar.placeholder.length > 0) {
+            NSString *translated = WGTranslateString(searchBar.placeholder);
+            if (![translated isEqualToString:searchBar.placeholder]) {
+                searchBar.placeholder = translated;
+                searchBar.semanticContentAttribute = WGSelectedSemanticContentAttribute();
+            }
+        }
+    }
+}
+
+static void WGScanViewTree(UIView *view, NSMutableSet<NSValue *> *visitedNodes, NSUInteger depth) {
+    if (!view || depth > 100) {
+        return;
+    }
+
+    WGTranslateExistingUIKitView(view);
+    WGTranslateAttributedTextIvar(view);
+    WGTranslateComponentTextView(view);
+
+    id node = WGSendObject(view, NSSelectorFromString(@"asyncdisplaykit_node"));
+    if (node) {
+        WGScanDisplayNode(node, visitedNodes, 0);
+    }
+
+    for (UIView *subview in view.subviews) {
+        WGScanViewTree(subview, visitedNodes, depth + 1);
+    }
+}
+
+static void WGScanAllVisibleWindows(void) {
+    if (!WGArabicLocalizationEnabled()) {
+        return;
+    }
+
+    UIApplication *application = UIApplication.sharedApplication;
+    NSMutableSet<NSValue *> *visitedNodes = [NSMutableSet set];
+
+    for (UIWindow *window in application.windows) {
+        if (!window.hidden && window.alpha > 0.01) {
+            WGScanViewTree(window, visitedNodes, 0);
+        }
+    }
+}
+
+static BOOL WGScanScheduled = NO;
+
+static void WGScheduleVisibleScan(void) {
+    @synchronized (UIApplication.class) {
+        if (WGScanScheduled) {
+            return;
+        }
+        WGScanScheduled = YES;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        WGScanAllVisibleWindows();
+        @synchronized (UIApplication.class) {
+            WGScanScheduled = NO;
+        }
+    });
+}
+
+static void WGScheduleScanBurst(void) {
+    WGScheduleVisibleScan();
+    const NSTimeInterval delays[] = {0.05, 0.20, 0.60, 1.50};
+    for (NSUInteger i = 0; i < sizeof(delays) / sizeof(delays[0]); i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delays[i] * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            WGScheduleVisibleScan();
+        });
+    }
 }
 
 #pragma mark - Stable UIKit hooks
 
-@interface NSBundle (WGArabicSafe)
-- (NSString *)wg_safe_localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)tableName;
+@interface NSBundle (WGArabicNodeFix)
+- (NSString *)wg_nf_localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)tableName;
 @end
 
-@implementation NSBundle (WGArabicSafe)
-- (NSString *)wg_safe_localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)tableName {
-    NSString *result = [self wg_safe_localizedStringForKey:key value:value table:tableName];
-    return WGArabicTranslateString(result);
+@implementation NSBundle (WGArabicNodeFix)
+- (NSString *)wg_nf_localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)tableName {
+    NSString *result = [self wg_nf_localizedStringForKey:key value:value table:tableName];
+    return WGTranslateString(result);
 }
 @end
 
-@interface UILabel (WGArabicSafe)
-- (void)wg_safe_setText:(NSString *)text;
-- (void)wg_safe_setAttributedText:(NSAttributedString *)text;
+@interface UILabel (WGArabicNodeFix)
+- (void)wg_nf_setText:(NSString *)text;
+- (void)wg_nf_setAttributedText:(NSAttributedString *)text;
 @end
 
-@implementation UILabel (WGArabicSafe)
-- (void)wg_safe_setText:(NSString *)text {
-    NSString *translated = WGArabicTranslateString(text);
-    [self wg_safe_setText:translated];
+@implementation UILabel (WGArabicNodeFix)
+- (void)wg_nf_setText:(NSString *)text {
+    if (WGIsOverlayObject(self)) {
+        [self wg_nf_setText:text];
+        return;
+    }
+    NSString *translated = WGTranslateString(text);
+    [self wg_nf_setText:translated];
     if (text && ![translated isEqualToString:text]) {
-        self.semanticContentAttribute = UISemanticContentAttributeForceRightToLeft;
-        self.textAlignment = NSTextAlignmentNatural;
+        WGApplySelectedDirectionToView(self);
     }
 }
-- (void)wg_safe_setAttributedText:(NSAttributedString *)text {
-    NSAttributedString *translated = WGArabicTranslateAttributedString(text);
-    [self wg_safe_setAttributedText:translated];
+- (void)wg_nf_setAttributedText:(NSAttributedString *)text {
+    if (WGIsOverlayObject(self)) {
+        [self wg_nf_setAttributedText:text];
+        return;
+    }
+    NSAttributedString *translated = WGTranslateAttributedString(text);
+    [self wg_nf_setAttributedText:translated];
     if (text && ![translated.string isEqualToString:text.string]) {
-        self.semanticContentAttribute = UISemanticContentAttributeForceRightToLeft;
-        self.textAlignment = NSTextAlignmentNatural;
+        WGApplySelectedDirectionToView(self);
     }
 }
 @end
 
-@interface UIButton (WGArabicSafe)
-- (void)wg_safe_setTitle:(NSString *)title forState:(UIControlState)state;
-- (void)wg_safe_setAttributedTitle:(NSAttributedString *)title forState:(UIControlState)state;
+@interface UIButton (WGArabicNodeFix)
+- (void)wg_nf_setTitle:(NSString *)title forState:(UIControlState)state;
+- (void)wg_nf_setAttributedTitle:(NSAttributedString *)title forState:(UIControlState)state;
 @end
 
-@implementation UIButton (WGArabicSafe)
-- (void)wg_safe_setTitle:(NSString *)title forState:(UIControlState)state {
-    NSString *translated = WGArabicTranslateString(title);
-    [self wg_safe_setTitle:translated forState:state];
+@implementation UIButton (WGArabicNodeFix)
+- (void)wg_nf_setTitle:(NSString *)title forState:(UIControlState)state {
+    if (WGIsOverlayObject(self)) {
+        [self wg_nf_setTitle:title forState:state];
+        return;
+    }
+    NSString *translated = WGTranslateString(title);
+    [self wg_nf_setTitle:translated forState:state];
     if (title && ![translated isEqualToString:title]) {
-        self.semanticContentAttribute = UISemanticContentAttributeForceRightToLeft;
+        self.semanticContentAttribute = WGSelectedSemanticContentAttribute();
     }
 }
-- (void)wg_safe_setAttributedTitle:(NSAttributedString *)title forState:(UIControlState)state {
-    NSAttributedString *translated = WGArabicTranslateAttributedString(title);
-    [self wg_safe_setAttributedTitle:translated forState:state];
+- (void)wg_nf_setAttributedTitle:(NSAttributedString *)title forState:(UIControlState)state {
+    if (WGIsOverlayObject(self)) {
+        [self wg_nf_setAttributedTitle:title forState:state];
+        return;
+    }
+    NSAttributedString *translated = WGTranslateAttributedString(title);
+    [self wg_nf_setAttributedTitle:translated forState:state];
     if (title && ![translated.string isEqualToString:title.string]) {
-        self.semanticContentAttribute = UISemanticContentAttributeForceRightToLeft;
+        self.semanticContentAttribute = WGSelectedSemanticContentAttribute();
     }
 }
 @end
 
-@interface UITextField (WGArabicSafe)
-- (void)wg_safe_setPlaceholder:(NSString *)placeholder;
+@interface UITextField (WGArabicNodeFix)
+- (void)wg_nf_setPlaceholder:(NSString *)placeholder;
 @end
 
-@implementation UITextField (WGArabicSafe)
-- (void)wg_safe_setPlaceholder:(NSString *)placeholder {
-    [self wg_safe_setPlaceholder:WGArabicTranslateString(placeholder)];
+@implementation UITextField (WGArabicNodeFix)
+- (void)wg_nf_setPlaceholder:(NSString *)placeholder {
+    [self wg_nf_setPlaceholder:WGTranslateString(placeholder)];
 }
 @end
 
-@interface UITextView (WGArabicSafe)
-- (void)wg_safe_setText:(NSString *)text;
-- (void)wg_safe_setAttributedText:(NSAttributedString *)text;
+@interface UITextView (WGArabicNodeFix)
+- (void)wg_nf_setText:(NSString *)text;
+- (void)wg_nf_setAttributedText:(NSAttributedString *)text;
 @end
 
-@implementation UITextView (WGArabicSafe)
-- (void)wg_safe_setText:(NSString *)text {
-    [self wg_safe_setText:WGArabicTranslateString(text)];
+@implementation UITextView (WGArabicNodeFix)
+- (void)wg_nf_setText:(NSString *)text {
+    [self wg_nf_setText:WGTranslateString(text)];
 }
-- (void)wg_safe_setAttributedText:(NSAttributedString *)text {
-    [self wg_safe_setAttributedText:WGArabicTranslateAttributedString(text)];
-}
-@end
-
-@interface UINavigationItem (WGArabicSafe)
-- (void)wg_safe_setTitle:(NSString *)title;
-@end
-
-@implementation UINavigationItem (WGArabicSafe)
-- (void)wg_safe_setTitle:(NSString *)title {
-    [self wg_safe_setTitle:WGArabicTranslateString(title)];
+- (void)wg_nf_setAttributedText:(NSAttributedString *)text {
+    [self wg_nf_setAttributedText:WGTranslateAttributedString(text)];
 }
 @end
 
-@interface UIViewController (WGArabicSafe)
-- (void)wg_safe_setTitle:(NSString *)title;
+@interface UINavigationItem (WGArabicNodeFix)
+- (void)wg_nf_setTitle:(NSString *)title;
 @end
 
-@implementation UIViewController (WGArabicSafe)
-- (void)wg_safe_setTitle:(NSString *)title {
-    [self wg_safe_setTitle:WGArabicTranslateString(title)];
+@implementation UINavigationItem (WGArabicNodeFix)
+- (void)wg_nf_setTitle:(NSString *)title {
+    [self wg_nf_setTitle:WGTranslateString(title)];
 }
 @end
 
-@interface UISearchBar (WGArabicSafe)
-- (void)wg_safe_setPlaceholder:(NSString *)placeholder;
+@interface UIViewController (WGArabicNodeFix)
+- (void)wg_nf_setTitle:(NSString *)title;
+- (void)wg_nf_viewDidAppear:(BOOL)animated;
 @end
 
-@implementation UISearchBar (WGArabicSafe)
-- (void)wg_safe_setPlaceholder:(NSString *)placeholder {
-    [self wg_safe_setPlaceholder:WGArabicTranslateString(placeholder)];
+@implementation UIViewController (WGArabicNodeFix)
+- (void)wg_nf_setTitle:(NSString *)title {
+    [self wg_nf_setTitle:WGTranslateString(title)];
+}
+- (void)wg_nf_viewDidAppear:(BOOL)animated {
+    [self wg_nf_viewDidAppear:animated];
+    WGScheduleScanBurst();
 }
 @end
 
-@interface UIAlertController (WGArabicSafe)
-+ (instancetype)wg_safe_alertControllerWithTitle:(NSString *)title
-                                          message:(NSString *)message
-                                   preferredStyle:(UIAlertControllerStyle)preferredStyle;
+@interface UISearchBar (WGArabicNodeFix)
+- (void)wg_nf_setPlaceholder:(NSString *)placeholder;
 @end
 
-@implementation UIAlertController (WGArabicSafe)
-+ (instancetype)wg_safe_alertControllerWithTitle:(NSString *)title
-                                          message:(NSString *)message
-                                   preferredStyle:(UIAlertControllerStyle)preferredStyle {
-    return [self wg_safe_alertControllerWithTitle:WGArabicTranslateString(title)
-                                          message:WGArabicTranslateString(message)
-                                   preferredStyle:preferredStyle];
+@implementation UISearchBar (WGArabicNodeFix)
+- (void)wg_nf_setPlaceholder:(NSString *)placeholder {
+    [self wg_nf_setPlaceholder:WGTranslateString(placeholder)];
 }
 @end
 
-@interface UIBarButtonItem (WGArabicSafe)
-- (instancetype)wg_safe_initWithTitle:(NSString *)title
-                                style:(UIBarButtonItemStyle)style
-                               target:(id)target
-                               action:(SEL)action;
+@interface UIAlertController (WGArabicNodeFix)
++ (instancetype)wg_nf_alertControllerWithTitle:(NSString *)title
+                                        message:(NSString *)message
+                                 preferredStyle:(UIAlertControllerStyle)preferredStyle;
 @end
 
-@implementation UIBarButtonItem (WGArabicSafe)
-- (instancetype)wg_safe_initWithTitle:(NSString *)title
-                                style:(UIBarButtonItemStyle)style
-                               target:(id)target
-                               action:(SEL)action {
-    return [self wg_safe_initWithTitle:WGArabicTranslateString(title)
-                                 style:style
-                                target:target
-                                action:action];
+@implementation UIAlertController (WGArabicNodeFix)
++ (instancetype)wg_nf_alertControllerWithTitle:(NSString *)title
+                                        message:(NSString *)message
+                                 preferredStyle:(UIAlertControllerStyle)preferredStyle {
+    return [self wg_nf_alertControllerWithTitle:WGTranslateString(title)
+                                        message:WGTranslateString(message)
+                                 preferredStyle:preferredStyle];
+}
+@end
+
+@interface UIBarButtonItem (WGArabicNodeFix)
+- (instancetype)wg_nf_initWithTitle:(NSString *)title
+                              style:(UIBarButtonItemStyle)style
+                             target:(id)target
+                             action:(SEL)action;
+@end
+
+@implementation UIBarButtonItem (WGArabicNodeFix)
+- (instancetype)wg_nf_initWithTitle:(NSString *)title
+                              style:(UIBarButtonItemStyle)style
+                             target:(id)target
+                             action:(SEL)action {
+    return [self wg_nf_initWithTitle:WGTranslateString(title)
+                               style:style
+                              target:target
+                              action:action];
 }
 @end
 
@@ -293,171 +487,99 @@ static void WGInstallUIKitHooks(void) {
     dispatch_once(&onceToken, ^{
         WGSwizzle(NSBundle.class,
                   @selector(localizedStringForKey:value:table:),
-                  @selector(wg_safe_localizedStringForKey:value:table:));
+                  @selector(wg_nf_localizedStringForKey:value:table:));
 
-        WGSwizzle(UILabel.class, @selector(setText:), @selector(wg_safe_setText:));
-        WGSwizzle(UILabel.class, @selector(setAttributedText:), @selector(wg_safe_setAttributedText:));
-
-        WGSwizzle(UIButton.class, @selector(setTitle:forState:), @selector(wg_safe_setTitle:forState:));
+        WGSwizzle(UILabel.class, @selector(setText:), @selector(wg_nf_setText:));
+        WGSwizzle(UILabel.class, @selector(setAttributedText:), @selector(wg_nf_setAttributedText:));
+        WGSwizzle(UIButton.class, @selector(setTitle:forState:), @selector(wg_nf_setTitle:forState:));
         WGSwizzle(UIButton.class,
                   @selector(setAttributedTitle:forState:),
-                  @selector(wg_safe_setAttributedTitle:forState:));
-
-        WGSwizzle(UITextField.class, @selector(setPlaceholder:), @selector(wg_safe_setPlaceholder:));
-        WGSwizzle(UITextView.class, @selector(setText:), @selector(wg_safe_setText:));
-        WGSwizzle(UITextView.class, @selector(setAttributedText:), @selector(wg_safe_setAttributedText:));
-        WGSwizzle(UINavigationItem.class, @selector(setTitle:), @selector(wg_safe_setTitle:));
-        WGSwizzle(UIViewController.class, @selector(setTitle:), @selector(wg_safe_setTitle:));
-        WGSwizzle(UISearchBar.class, @selector(setPlaceholder:), @selector(wg_safe_setPlaceholder:));
-
+                  @selector(wg_nf_setAttributedTitle:forState:));
+        WGSwizzle(UITextField.class, @selector(setPlaceholder:), @selector(wg_nf_setPlaceholder:));
+        WGSwizzle(UITextView.class, @selector(setText:), @selector(wg_nf_setText:));
+        WGSwizzle(UITextView.class, @selector(setAttributedText:), @selector(wg_nf_setAttributedText:));
+        WGSwizzle(UINavigationItem.class, @selector(setTitle:), @selector(wg_nf_setTitle:));
+        WGSwizzle(UIViewController.class, @selector(setTitle:), @selector(wg_nf_setTitle:));
+        WGSwizzle(UIViewController.class, @selector(viewDidAppear:), @selector(wg_nf_viewDidAppear:));
+        WGSwizzle(UISearchBar.class, @selector(setPlaceholder:), @selector(wg_nf_setPlaceholder:));
         WGSwizzleClass(UIAlertController.class,
                        @selector(alertControllerWithTitle:message:preferredStyle:),
-                       @selector(wg_safe_alertControllerWithTitle:message:preferredStyle:));
-
+                       @selector(wg_nf_alertControllerWithTitle:message:preferredStyle:));
         WGSwizzle(UIBarButtonItem.class,
                   @selector(initWithTitle:style:target:action:),
-                  @selector(wg_safe_initWithTitle:style:target:action:));
+                  @selector(wg_nf_initWithTitle:style:target:action:));
     });
 }
 
+#pragma mark - Exact _ASDisplayView hook
 
-#pragma mark - Targeted NSAttributedString class-cluster hooks
+static IMP WGOriginalASDisplayViewDidMoveToWindow = NULL;
+static BOOL WGASDisplayViewHookInstalled = NO;
 
-/*
- * Whitegram's settings screen stores most visible text directly in Swift
- * TextNode properties. Those properties do not expose Objective-C setters,
- * so UIKit hooks never see them. The stable interception point is the
- * concrete Foundation attributed-string initializer used before assignment.
- *
- * We hook only the concrete immutable/mutable classes returned by Foundation,
- * verify exact signatures, and translate only strings present in our map.
- */
-
-static id WGAttributedInitString(id self, SEL _cmd, NSString *string) {
-    IMP original = WGFindOriginalIMP(self, _cmd);
-    if (!original) return nil;
-    NSString *translated = WGArabicTranslateString(string);
-    return ((id (*)(id, SEL, NSString *))original)(self, _cmd, translated);
+static void WGASDisplayViewDidMoveToWindow(id self, SEL _cmd) {
+    if (WGOriginalASDisplayViewDidMoveToWindow) {
+        ((void (*)(id, SEL))WGOriginalASDisplayViewDidMoveToWindow)(self, _cmd);
+    }
+    WGScheduleScanBurst();
 }
 
-static id WGAttributedInitStringAttributes(id self, SEL _cmd, NSString *string, NSDictionary *attributes) {
-    IMP original = WGFindOriginalIMP(self, _cmd);
-    if (!original) return nil;
-    NSString *translated = WGArabicTranslateString(string);
-    return ((id (*)(id, SEL, NSString *, NSDictionary *))original)(self, _cmd, translated, attributes);
-}
+static void WGInstallASDisplayViewHook(void) {
+    @synchronized (UIApplication.class) {
+        if (WGASDisplayViewHookInstalled) {
+            return;
+        }
 
-static BOOL WGMethodMatchesAttributedInit(Method method, NSUInteger argumentCount) {
-    if (!method || method_getNumberOfArguments(method) != argumentCount) return NO;
-    char returnType[32] = {0};
-    char argType[32] = {0};
-    method_getReturnType(method, returnType, sizeof(returnType));
-    method_getArgumentType(method, 2, argType, sizeof(argType));
-    return returnType[0] == '@' && argType[0] == '@';
-}
+        Class cls = objc_getClass("_ASDisplayView");
+        SEL selector = sel_registerName("didMoveToWindow");
+        Method method = cls ? class_getInstanceMethod(cls, selector) : NULL;
+        if (!method) {
+            return;
+        }
 
-static BOOL WGReplaceAttributedInitializer(Class cls, SEL selector, IMP replacement, NSUInteger argumentCount) {
-    if (!cls || !selector || !replacement) return NO;
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!WGMethodMatchesAttributedInit(method, argumentCount)) return NO;
-
-    NSString *key = WGHookKey(cls, selector);
-    @synchronized (WGInstalledHooks()) {
-        if ([WGInstalledHooks() containsObject:key]) return YES;
-        IMP original = method_getImplementation(method);
+        WGOriginalASDisplayViewDidMoveToWindow = method_getImplementation(method);
         const char *types = method_getTypeEncoding(method);
-        if (!original || !types) return NO;
-        if (!class_addMethod(cls, selector, replacement, types)) {
-            class_replaceMethod(cls, selector, replacement, types);
-        }
-        WGOriginalIMPs()[key] = [NSValue valueWithPointer:original];
-        [WGInstalledHooks() addObject:key];
-        return YES;
+        class_replaceMethod(cls, selector, (IMP)WGASDisplayViewDidMoveToWindow, types);
+        WGASDisplayViewHookInstalled = YES;
     }
 }
 
-static void WGInstallAttributedStringHooks(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSAttributedString *immutableA = [[NSAttributedString alloc] initWithString:@"WGProbe"];
-        NSAttributedString *immutableB = [[NSAttributedString alloc] initWithString:@"WGProbe" attributes:@{}];
-        NSMutableAttributedString *mutableA = [[NSMutableAttributedString alloc] initWithString:@"WGProbe"];
-        NSMutableAttributedString *mutableB = [[NSMutableAttributedString alloc] initWithString:@"WGProbe" attributes:@{}];
+#pragma mark - Language changes
 
-        NSArray<Class> *classes = @[
-            [immutableA class],
-            [immutableB class],
-            [mutableA class],
-            [mutableB class]
-        ];
-
-        NSMutableSet<NSString *> *seen = [NSMutableSet set];
-        for (Class cls in classes) {
-            NSString *name = NSStringFromClass(cls);
-            if (!cls || [seen containsObject:name]) continue;
-            [seen addObject:name];
-            WGReplaceAttributedInitializer(cls,
-                                           @selector(initWithString:),
-                                           (IMP)WGAttributedInitString,
-                                           3);
-            WGReplaceAttributedInitializer(cls,
-                                           @selector(initWithString:attributes:),
-                                           (IMP)WGAttributedInitStringAttributes,
-                                           4);
-        }
+static void WGLanguageSelectionChanged(NSNotification *notification) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        WGRefreshLanguageOverlay();
+        WGScheduleScanBurst();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            WGScheduleScanBurst();
+        });
     });
 }
 
-#pragma mark - Allow-listed Telegram text classes
-
-static void WGHookClassSetter(const char *className, const char *selectorName) {
-    Class cls = objc_getClass(className);
-    if (!cls) {
-        return;
-    }
-    WGReplaceSafeObjectSetter(cls, sel_registerName(selectorName), (IMP)WGSafeObjectSetter);
-}
-
-static void WGInstallTelegramTextHooks(void) {
-    // Exact Objective-C runtime names found in Telegram/Whitegram 12.8.
-    // No generic class enumeration is performed.
-    const char *classes[] = {
-        "_TtC7Display17ImmediateTextNode",
-        "_TtC20TextNodeWithEntities29ImmediateTextNodeWithEntities",
-        "ASTextNode",
-        "ASTextNode2",
-    };
-
-    const char *selectors[] = {
-        "setAttributedText:",
-        "setText:",
-    };
-
-    for (size_t i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
-        for (size_t j = 0; j < sizeof(selectors) / sizeof(selectors[0]); j++) {
-            WGHookClassSetter(classes[i], selectors[j]);
-        }
-    }
-}
-
-static void WGInstallAllHooks(void) {
-    WGInstallUIKitHooks();
-    WGInstallAttributedStringHooks();
-    WGInstallTelegramTextHooks();
-}
+#pragma mark - Entry point
 
 __attribute__((constructor))
-static void WGArabicSafeEntryPoint(void) {
+static void WGArabicNodeFixEntryPoint(void) {
     @autoreleasepool {
-        WGInstallAllHooks();
+        WGInstallUIKitHooks();
+        WGInstallASDisplayViewHook();
+        [NSNotificationCenter.defaultCenter addObserverForName:WGLanguageDidChangeNotification
+                                                        object:nil
+                                                         queue:NSOperationQueue.mainQueue
+                                                    usingBlock:^(NSNotification *note) {
+            WGLanguageSelectionChanged(note);
+        }];
 
-        // Some Swift classes may be registered after the injected dylib's
-        // constructor. Retry only the fixed allow-list; never scan the app.
         dispatch_async(dispatch_get_main_queue(), ^{
-            WGInstallTelegramTextHooks();
+            WGInstallLanguageOverlay();
+            WGInstallASDisplayViewHook();
+            WGScheduleScanBurst();
+
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
-                WGInstallTelegramTextHooks();
+                WGInstallASDisplayViewHook();
+                WGInstallLanguageOverlay();
+                WGScheduleScanBurst();
             });
         });
     }
